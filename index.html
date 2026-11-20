@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transmitir tela</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #1e1f22; color: #eee;
+         display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 20px; }
+  h1 { margin: 0; font-size: 22px; }
+  .linha { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  button, input { font-size: 16px; padding: 10px 14px; border-radius: 6px; border: none; }
+  button { background: #5865f2; color: #fff; cursor: pointer; }
+  button:hover { background: #4752c4; }
+  button.parar { background: #da373c; }
+  input { width: 120px; text-transform: uppercase; text-align: center; }
+  #codigo { font-size: 32px; font-weight: bold; letter-spacing: 4px; color: #57f287; }
+  #status { color: #aaa; min-height: 1.2em; }
+  video { width: 100%; max-width: 1280px; background: #000; border-radius: 8px; display: none; }
+</style>
+</head>
+<body>
+<h1>Transmitir tela</h1>
+
+<div class="linha" id="inicio">
+  <button id="btnTransmitir">Transmitir minha tela</button>
+  <span style="align-self:center">ou</span>
+  <input id="inputCodigo" placeholder="CÓDIGO" maxlength="6">
+  <button id="btnAssistir">Assistir</button>
+</div>
+
+<div id="codigo"></div>
+<button id="btnLink" style="display:none">Copiar link</button>
+<div id="status"></div>
+<button id="btnParar" class="parar" style="display:none">Parar</button>
+<video id="video" autoplay playsinline controls></video>
+
+<script>
+const PREFIXO = 'transmitir-tela-lg-';
+const $ = id => document.getElementById(id);
+const status = t => $('status').textContent = t;
+let peer, stream;
+
+function gerarCodigo() {
+  const letras = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from({ length: 6 }, () => letras[Math.floor(Math.random() * letras.length)]).join('');
+}
+
+// ---- Quem transmite ----
+$('btnTransmitir').onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
+  } catch (e) {
+    status('Compartilhamento cancelado.');
+    return;
+  }
+  const codigo = gerarCodigo();
+  $('inicio').style.display = 'none';
+  $('btnParar').style.display = '';
+  $('video').srcObject = stream;
+  $('video').muted = true;            // não ouvir o próprio áudio
+  $('video').style.display = 'block';
+  status('Conectando...');
+
+  peer = new Peer(PREFIXO + codigo);
+  peer.on('open', () => {
+    $('codigo').textContent = codigo;
+    status('Passe o link (ou o código) para quem vai assistir. Espectadores: 0');
+    $('btnLink').style.display = '';
+  });
+  let espectadores = 0;
+  peer.on('connection', conn => {
+    conn.on('open', () => {
+      const call = peer.call(conn.peer, stream);
+      espectadores++;
+      status(`Passe o link (ou o código) para quem vai assistir. Espectadores: ${espectadores}`);
+      conn.on('close', () => {
+        espectadores--;
+        status(`Passe o link (ou o código) para quem vai assistir. Espectadores: ${espectadores}`);
+        call.close();
+      });
+    });
+  });
+  peer.on('error', e => status('Erro: ' + e.type));
+  stream.getVideoTracks()[0].onended = parar;   // botão "Parar compartilhamento" do navegador
+};
+
+// ---- Quem assiste ----
+$('btnAssistir').onclick = () => {
+  const codigo = $('inputCodigo').value.trim().toUpperCase();
+  if (codigo.length !== 6) { status('Digite o código de 6 letras.'); return; }
+  $('inicio').style.display = 'none';
+  $('btnParar').style.display = '';
+  status('Conectando...');
+
+  peer = new Peer();
+  peer.on('open', () => {
+    const conn = peer.connect(PREFIXO + codigo);
+    conn.on('open', () => status('Conectado, esperando a imagem...'));
+    conn.on('close', () => status('A transmissão terminou.'));
+  });
+  peer.on('call', call => {
+    call.answer();
+    call.on('stream', s => {
+      const v = $('video');
+      v.srcObject = s;
+      v.style.display = 'block';
+      v.play().then(() => {
+        status('Assistindo. Clique duas vezes no vídeo para tela cheia.');
+      }).catch(() => {
+        // Navegador bloqueia som automático quando a página abriu pelo link: começa mudo
+        v.muted = true;
+        v.play();
+        status('Assistindo sem som: clique no vídeo para ativar o som.');
+        v.addEventListener('click', () => {
+          v.muted = false;
+          status('Assistindo. Clique duas vezes no vídeo para tela cheia.');
+        }, { once: true });
+      });
+    });
+  });
+  peer.on('error', e => status(e.type === 'peer-unavailable' ? 'Código não encontrado.' : 'Erro: ' + e.type));
+};
+
+$('inputCodigo').onkeydown = e => { if (e.key === 'Enter') $('btnAssistir').click(); };
+$('video').ondblclick = () => document.fullscreenElement ? document.exitFullscreen() : $('video').requestFullscreen();
+
+function parar() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (peer) peer.destroy();
+  location.reload();
+}
+$('btnParar').onclick = parar;
+
+$('btnLink').onclick = async () => {
+  const link = location.href.split('#')[0] + '#' + $('codigo').textContent;
+  try {
+    await navigator.clipboard.writeText(link);
+    $('btnLink').textContent = 'Link copiado!';
+  } catch {
+    prompt('Copie o link:', link);
+  }
+  setTimeout(() => $('btnLink').textContent = 'Copiar link', 2000);
+};
+
+// Abriu pelo link (…#ABC123): já começa a assistir
+if (location.hash.length > 1) {
+  $('inputCodigo').value = location.hash.slice(1);
+  $('btnAssistir').click();
+}
+</script>
+</body>
+</html>
