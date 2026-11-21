@@ -134,7 +134,7 @@ function parar() {
 $('btnParar').onclick = parar;
 
 $('btnLink').onclick = async () => {
-  const link = location.href.split('#')[0] + '#' + $('codigo').textContent;
+  const link = 'https://lucasgirelli.github.io/transmitir-tela/#' + $('codigo').textContent;
   try {
     await navigator.clipboard.writeText(link);
     $('btnLink').textContent = 'Link copiado!';
